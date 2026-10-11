@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pixel Art Matrix Controller</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --accent: #38bdf8;
+      --text: #f8fafc;
+    }
+    body {
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .container {
+      max-width: 520px;
+      width: 100%;
+      background: var(--card);
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+    }
+    h1 {
+      font-size: 1.25rem;
+      margin: 0 0 16px 0;
+      text-align: center;
+    }
+    .config-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    input[type="text"] {
+      flex: 1;
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #fff;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(16, 1fr);
+      gap: 2px;
+      background: #0f172a;
+      padding: 8px;
+      border-radius: 12px;
+      aspect-ratio: 1;
+      margin-bottom: 16px;
+      touch-action: none;
+    }
+    .cell {
+      background: #000;
+      border-radius: 2px;
+      cursor: crosshair;
+      transition: background 0.05s;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .tools {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    input[type="color"] {
+      width: 36px;
+      height: 36px;
+      border: none;
+      border-radius: 8px;
+      background: none;
+      cursor: pointer;
+    }
+    button, label.btn {
+      padding: 8px 14px;
+      background: #334155;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    button.primary {
+      background: var(--accent);
+      color: #0f172a;
+      font-weight: 600;
+    }
+    button:hover, label.btn:hover {
+      opacity: 0.9;
+    }
+    .status {
+      font-size: 0.75rem;
+      color: #94a3b8;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Pixel Matrix Controller</h1>
+
+    <!-- WLED IP Configuration -->
+    <div class="config-bar">
+      <input type="text" id="ipInput" placeholder="ESP32 IP (e.g. 192.168.1.100)" />
+      <button class="primary" onclick="pushToWLED()">Push to Display</button>
+    </div>
+
+    <!-- Drawing Grid -->
+    <div class="grid" id="pixelGrid"></div>
+
+    <!-- Controls -->
+    <div class="toolbar">
+      <div class="tools">
+        <input type="color" id="colorPicker" value="#ff0055" />
+        <button onclick="clearGrid()">Clear</button>
+        <button onclick="fillGrid()">Fill</button>
+      </div>
+      <div>
+        <label class="btn" for="imageLoader">Upload Photo</label>
+        <input type="file" id="imageLoader" accept="image/*" style="display:none;" />
+      </div>
+    </div>
+
+    <div class="status" id="statusText">Ready</div>
+  </div>
+
+  <script>
+    const GRID_SIZE = 16;
+    const grid = document.getElementById("pixelGrid");
+    const colorPicker = document.getElementById("colorPicker");
+    const ipInput = document.getElementById("ipInput");
+    const statusText = document.getElementById("statusText");
+    const imageLoader = document.getElementById("imageLoader");
+
+    let isDrawing = false;
+    let pixels = new Array(GRID_SIZE * GRID_SIZE).fill("#000000");
+
+    // Load saved IP
+    ipInput.value = localStorage.getItem("wled_ip") || "";
+    ipInput.addEventListener("change", () => {
+      localStorage.setItem("wled_ip", ipInput.value.trim());
+    });
+
+    // Build 16x16 Grid DOM
+    for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+      const cell = document.createElement("div");
+      cell.classList.add("cell");
+      cell.dataset.index = i;
+
+      cell.addEventListener("mousedown", (e) => {
+        isDrawing = true;
+        paintCell(i);
+      });
+      cell.addEventListener("mouseenter", (e) => {
+        if (isDrawing) paintCell(i);
+      });
+
+      // Touch events for mobile screens
+      cell.addEventListener("touchstart", (e) => {
+        isDrawing = true;
+        paintCell(i);
+      }, { passive: true });
+
+      grid.appendChild(cell);
+    }
+
+    window.addEventListener("mouseup", () => isDrawing = false);
+    window.addEventListener("touchend", () => isDrawing = false);
+
+    // Support touch dragging across cells
+    grid.addEventListener("touchmove", (e) => {
+      const touch = e.touches[0];
+      const target = document.elementFromPoint(touch.clientX, touch.clientY);
+      if (target && target.classList.contains("cell")) {
+        paintCell(parseInt(target.dataset.index));
+      }
+    });
+
+    function paintCell(index) {
+      const color = colorPicker.value;
+      pixels[index] = color;
+      grid.children[index].style.backgroundColor = color;
+    }
+
+    function clearGrid() {
+      pixels.fill("#000000");
+      Array.from(grid.children).forEach(c => c.style.backgroundColor = "#000000");
+      pushToWLED();
+    }
+
+    function fillGrid() {
+      const color = colorPicker.value;
+      pixels.fill(color);
+      Array.from(grid.children).forEach(c => c.style.backgroundColor = color);
+      pushToWLED();
+    }
+
+    // Photo-to-Pixel Art Downscaler
+    imageLoader.addEventListener("change", function(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const img = new Image();
+        img.onload = function() {
+          const canvas = document.createElement("canvas");
+          canvas.width = GRID_SIZE;
+          canvas.height = GRID_SIZE;
+          const ctx = canvas.getContext("2d");
+
+          // Draw image downscaled directly to 16x16
+          ctx.drawImage(img, 0, 0, GRID_SIZE, GRID_SIZE);
+          const imgData = ctx.getImageData(0, 0, GRID_SIZE, GRID_SIZE).data;
+
+          for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+            const r = imgData[i * 4];
+            const g = imgData[i * 4 + 1];
+            const b = imgData[i * 4 + 2];
+            const hex = "#" + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
+            pixels[i] = hex;
+            grid.children[i].style.backgroundColor = hex;
+          }
+          pushToWLED();
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    // Send array to WLED JSON API
+    async function pushToWLED() {
+      const ip = ipInput.value.trim();
+      if (!ip) {
+        statusText.innerText = "Please enter your ESP32 IP address.";
+        return;
+      }
+
+      statusText.innerText = "Syncing with display...";
+
+      // Build WLED individual LED command array: [index, "HEX", ...]
+      const ledArray = [];
+      for (let i = 0; i < pixels.length; i++) {
+        ledArray.push(i, pixels[i].replace("#", ""));
+      }
+
+      const payload = {
+        on: true,
+        seg: {
+          i: ledArray
+        }
+      };
+
+      try {
+        const res = await fetch(`http://${ip}/json/state`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          statusText.innerText = "Display updated!";
+        } else {
+          statusText.innerText = "Error updating WLED: " + res.statusText;
+        }
+      } catch (err) {
+        statusText.innerText = "Failed to connect to " + ip + ". Make sure you are on the same Wi-Fi.";
+      }
+    }
+  </script>
+</body>
+</html>
