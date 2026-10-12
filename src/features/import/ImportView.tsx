@@ -1,12 +1,15 @@
-import { Clapperboard, ImagePlus, PenLine, Plus, RotateCcw, Upload } from "lucide-react";
+import { Clapperboard, Crosshair, Eye, ImagePlus, PenLine, Plus, RotateCcw, Sparkles, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { decodeGif, sampleGif, type DecodedGif } from "@/core/gif";
+import {
+  autoCrop, DEFAULT_RASTER, FULL_CROP, LED_ENHANCE, loadImage, looksLikePixelArt, NO_ENHANCE, PIXEL_ART_RASTER,
+  sampleCells, toneCells, type Cells, type RasterOptions,
+} from "@/core/image";
 import { NO_ADJUST } from "@/core/color";
-import { decodeGif, gifToFrames, type DecodedGif } from "@/core/gif";
-import { DEFAULT_RASTER, FULL_CROP, loadImage, rasterize, type RasterOptions } from "@/core/image";
-import type { Frame } from "@/core/matrix";
+import { blankFrame, type Frame } from "@/core/matrix";
 import { LiveButton } from "@/components/LiveButton";
 import { MatrixCanvas } from "@/components/MatrixCanvas";
-import { Button, ColorField, Panel, Segmented, Slider, cx } from "@/components/ui";
+import { Button, ColorField, Panel, Segmented, Slider, Toggle, cx } from "@/components/ui";
 import { registerSource, showStatic, stopLive, useIsLive } from "@/engine/sources";
 import { useEditor } from "@/store/editor";
 import { CropBox } from "./CropBox";
@@ -18,6 +21,7 @@ interface Loaded {
   height: number;
   image: HTMLImageElement | null;
   gif: DecodedGif | null;
+  pixelArt: boolean;
 }
 
 let importFrames: Frame[] = [];
@@ -37,20 +41,28 @@ registerSource({
   },
 });
 
+const sourcesOf = (src: Loaded) => (src.gif ? src.gif.canvases : [src.image!]);
+
+/** What the old pipeline did: plain average of the whole image — used for the before/after compare. */
+const BASIC: RasterOptions = { crop: FULL_CROP, resample: "smooth", adjust: NO_ADJUST, colors: 0, background: 0, enhance: NO_ENHANCE };
+
 export function ImportView() {
   const [src, setSrc] = useState<Loaded | null>(null);
   const [opts, setOpts] = useState<RasterOptions>(DEFAULT_RASTER);
-  const [frames, setFrames] = useState<Frame[]>([]);
+  const [cells, setCells] = useState<Cells[]>([]);
   const [tick, setTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [done, setDone] = useState<string | null>(null);
+  const [comparing, setComparing] = useState(false);
+  const [basic, setBasic] = useState<Frame[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const gifLive = useIsLive("import");
 
   const set = (p: Partial<RasterOptions>) => setOpts((o) => ({ ...o, ...p }));
   const setAdj = (p: Partial<RasterOptions["adjust"]>) => setOpts((o) => ({ ...o, adjust: { ...o.adjust, ...p } }));
+  const setEnh = (p: Partial<RasterOptions["enhance"]>) => setOpts((o) => ({ ...o, enhance: { ...o.enhance, ...p } }));
 
   const load = async (file: File) => {
     setError(null);
@@ -59,15 +71,23 @@ export function ImportView() {
     try {
       if (src) URL.revokeObjectURL(src.url);
       const url = URL.createObjectURL(file);
+      let loaded: Loaded;
       if (file.type === "image/gif") {
         const gif = await decodeGif(await file.arrayBuffer());
         if (!gif.canvases.length) throw new Error("GIF has no frames");
-        setSrc({ name: file.name, url: gif.canvases[0].toDataURL(), width: gif.width, height: gif.height, image: null, gif });
+        loaded = { name: file.name, url: gif.canvases[0].toDataURL(), width: gif.width, height: gif.height, image: null, gif, pixelArt: looksLikePixelArt(gif.canvases[0]) };
       } else {
         const image = await loadImage(url);
-        setSrc({ name: file.name, url, width: image.naturalWidth, height: image.naturalHeight, image, gif: null });
+        loaded = { name: file.name, url, width: image.naturalWidth, height: image.naturalHeight, image, gif: null, pixelArt: looksLikePixelArt(image) };
       }
-      setOpts((o) => ({ ...o, crop: FULL_CROP }));
+      // pixel art is kept pixel-exact; everything else gets the LED pipeline and is cropped to its subject
+      setOpts(
+        loaded.pixelArt
+          ? { ...DEFAULT_RASTER, ...PIXEL_ART_RASTER, crop: FULL_CROP }
+          : { ...DEFAULT_RASTER, crop: autoCrop(sourcesOf(loaded)) }
+      );
+      setBasic(null);
+      setSrc(loaded);
     } catch (e) {
       setError((e as Error).message || "Unsupported file");
     } finally {
@@ -85,16 +105,21 @@ export function ImportView() {
     return () => window.removeEventListener("paste", onPaste);
   });
 
-  // re-rasterize (debounced) whenever options change
+  // sampling (slow-ish for long GIFs) only reruns when crop / sampling options change
+  const { crop, resample } = opts;
+  const { removeBg, bgTolerance } = opts.enhance;
   useEffect(() => {
     if (!src) return;
     const h = setTimeout(() => {
-      const out = src.gif ? gifToFrames(src.gif, opts) : [rasterize(src.image!, opts)];
-      setFrames(out);
-      importFrames = out;
-    }, 80);
+      const o = { crop, resample, enhance: { ...LED_ENHANCE, removeBg, bgTolerance } };
+      setCells(src.gif ? sampleGif(src.gif, o) : [sampleCells(src.image!, o)]);
+    }, 60);
     return () => clearTimeout(h);
-  }, [src, opts]);
+  }, [src, crop, resample, removeBg, bgTolerance]);
+
+  // tone changes are instant
+  const frames = useMemo(() => (cells.length ? toneCells(cells, opts) : []), [cells, opts]);
+  importFrames = frames;
 
   const gifFps = useMemo(() => {
     if (!src?.gif) return 10;
@@ -109,9 +134,17 @@ export function ImportView() {
     return () => clearInterval(h);
   }, [frames.length, gifFps]);
 
-  const preview = frames.length ? frames[tick % frames.length] : null;
+  const startCompare = () => {
+    if (!src) return;
+    if (!basic) setBasic(sourcesOf(src).map((s) => toneCells([sampleCells(s, BASIC)], BASIC)[0]));
+    setComparing(true);
+  };
+
+  const shown = comparing && basic ? basic : frames;
+  const preview = shown.length ? shown[tick % shown.length] : null;
   const ed = useEditor.getState;
   const flash = (m: string) => { setDone(m); setTimeout(() => setDone(null), 2500); };
+  const isPixel = opts.resample === "nearest";
 
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
@@ -146,22 +179,23 @@ export function ImportView() {
                     max={10}
                     step={0.05}
                     format={(v) => `${v.toFixed(1)}×`}
-                    onChange={(v) => {
-                      const size = 1 / v;
-                      set({ crop: { ...opts.crop, size } });
-                    }}
+                    onChange={(v) => set({ crop: { ...opts.crop, size: 1 / v } })}
                   />
                 </div>
-                <Button size="sm" variant="ghost" icon={<RotateCcw size={14} />} onClick={() => set({ crop: FULL_CROP })}>
-                  Reset crop
+                <Button size="sm" icon={<Crosshair size={14} />} onClick={() => set({ crop: autoCrop(sourcesOf(src)) })} title="Zoom in on the main subject">
+                  Auto crop
                 </Button>
-                <Button size="sm" icon={<Upload size={14} />} onClick={() => input.current?.click()}>
+                <Button size="sm" variant="ghost" icon={<RotateCcw size={14} />} onClick={() => set({ crop: FULL_CROP })}>
+                  Full image
+                </Button>
+                <Button size="sm" variant="ghost" icon={<Upload size={14} />} onClick={() => input.current?.click()}>
                   Replace
                 </Button>
               </div>
               <p className="mt-2 truncate text-xs text-muted">
                 {src.name} · {src.width}×{src.height}
-                {src.gif && ` · ${src.gif.canvases.length} frames @ ~${gifFps} fps`} · drag to move, scroll to zoom
+                {src.gif && ` · ${src.gif.canvases.length} frames @ ~${gifFps} fps`}
+                {src.pixelArt ? " · pixel art detected, kept pixel-exact" : " · auto-cropped to the subject"} · drag to move, scroll to zoom
               </p>
             </>
           ) : (
@@ -173,21 +207,61 @@ export function ImportView() {
               <ImagePlus size={36} strokeWidth={1.5} />
               <span className="text-sm font-medium">{busy ? "Decoding…" : "Drop a photo or animated GIF"}</span>
               <span className="text-xs text-faint">PNG · JPG · WEBP · GIF — or paste from clipboard</span>
+              <span className="max-w-sm text-center text-xs text-faint">
+                Tip: simple subjects (logos, icons, faces, pixel-art GIFs) on plain backgrounds look best on 16×16.
+              </span>
             </button>
           )}
           {error && <p className="mt-2 text-sm text-err">{error}</p>}
         </div>
 
-        <Panel title="Adjust">
+        <Panel
+          title={<span className="inline-flex items-center gap-1.5"><Sparkles size={12} /> Enhance for LEDs</span>}
+          actions={
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RotateCcw size={14} />}
+              onClick={() => setOpts((o) => ({ ...o, ...(src?.pixelArt ? PIXEL_ART_RASTER : { resample: DEFAULT_RASTER.resample, enhance: LED_ENHANCE, adjust: DEFAULT_RASTER.adjust }) }))}
+            >
+              Defaults
+            </Button>
+          }
+        >
+          <span className="label mb-1.5 block">Downscaling</span>
+          <Segmented
+            value={opts.resample}
+            onChange={(resample) => set({ resample })}
+            options={[
+              { value: "sharp", label: "Sharp", title: "Each LED takes the dominant colour of its area — crisp edges" },
+              { value: "smooth", label: "Smooth", title: "Average colour — softer, good for gradients" },
+              { value: "nearest", label: "Pixel art", title: "Keep source pixels exactly — for images that already are pixel art" },
+            ]}
+          />
+          <div className={cx("mt-4 grid gap-x-6 gap-y-3 sm:grid-cols-2", isPixel && "opacity-90")}>
+            <Toggle label="Auto levels" hint="Use the full brightness range" checked={opts.enhance.autoLevels} onChange={(autoLevels) => setEnh({ autoLevels })} />
+            <Toggle
+              label="Remove background"
+              hint="Blacks out the plain area around the subject"
+              checked={opts.enhance.removeBg}
+              onChange={(removeBg) => setEnh({ removeBg })}
+            />
+            <Slider label="Shadow lift" value={opts.enhance.shadows} min={0} max={100} onChange={(shadows) => setEnh({ shadows })} format={(v) => `${v}%`} />
+            <Slider label="Sharpen" value={opts.enhance.sharpen} min={0} max={100} onChange={(sharpen) => setEnh({ sharpen })} format={(v) => `${v}%`} />
+            {opts.enhance.removeBg && (
+              <Slider label="Background tolerance" value={opts.enhance.bgTolerance} min={0} max={100} onChange={(bgTolerance) => setEnh({ bgTolerance })} format={(v) => `${v}%`} />
+            )}
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            WLED gamma-corrects colours (2.2 by default), which darkens mid-tones a lot on the LEDs — shadow lift keeps that detail visible.
+          </p>
+        </Panel>
+
+        <Panel title="Color">
           <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-            <div>
-              <span className="label mb-1.5 block">Downsampling</span>
-              <Segmented
-                value={opts.resample}
-                onChange={(resample) => set({ resample })}
-                options={[{ value: "smooth", label: "Smooth (bicubic)" }, { value: "nearest", label: "Nearest" }]}
-              />
-            </div>
+            <Slider label="Brightness" value={opts.adjust.brightness} min={-100} max={100} onChange={(brightness) => setAdj({ brightness })} />
+            <Slider label="Contrast" value={opts.adjust.contrast} min={-100} max={100} onChange={(contrast) => setAdj({ contrast })} />
+            <Slider label="Saturation" value={opts.adjust.saturation} min={-100} max={100} onChange={(saturation) => setAdj({ saturation })} />
             <div>
               <span className="label mb-1.5 block">Color limit</span>
               <Segmented
@@ -196,23 +270,32 @@ export function ImportView() {
                 options={[0, 32, 16, 8, 4].map((v) => ({ value: v, label: v ? String(v) : "Full" }))}
               />
             </div>
-            <Slider label="Brightness" value={opts.adjust.brightness} min={-100} max={100} onChange={(brightness) => setAdj({ brightness })} />
-            <Slider label="Contrast" value={opts.adjust.contrast} min={-100} max={100} onChange={(contrast) => setAdj({ contrast })} />
-            <Slider label="Saturation" value={opts.adjust.saturation} min={-100} max={100} onChange={(saturation) => setAdj({ saturation })} />
-            <div className="flex items-end justify-between gap-3">
-              <div className="flex-1"><ColorField label="Transparent bg" value={opts.background} onChange={(background) => set({ background })} /></div>
-            </div>
+            <ColorField label="Background" value={opts.background} onChange={(background) => set({ background })} />
           </div>
-          <Button size="sm" variant="ghost" className="mt-3" icon={<RotateCcw size={14} />} onClick={() => setOpts((o) => ({ ...o, adjust: NO_ADJUST, colors: 0, background: 0 }))}>
-            Reset adjustments
-          </Button>
         </Panel>
       </div>
 
       <div className="flex flex-col gap-4">
-        <Panel title="16×16 result">
+        <Panel
+          title={comparing ? "Before (plain shrink)" : "16×16 result"}
+          actions={
+            src && (
+              <Button
+                size="sm"
+                variant="ghost"
+                icon={<Eye size={14} />}
+                onPointerDown={startCompare}
+                onPointerUp={() => setComparing(false)}
+                onPointerLeave={() => setComparing(false)}
+                title="Hold to see the image without enhancement"
+              >
+                Hold to compare
+              </Button>
+            )
+          }
+        >
           <div className="rounded-lg bg-black p-2">
-            <MatrixCanvas frame={preview ?? new Array(256).fill(0)} look="led" grid={false} />
+            <MatrixCanvas frame={preview ?? blankFrame()} look="led" grid={false} />
           </div>
           <div className="mt-3 flex flex-col gap-2">
             {src?.gif && frames.length > 1 ? (
@@ -234,21 +317,21 @@ export function ImportView() {
               </>
             ) : (
               <>
-                <Button variant="primary" disabled={!preview} onClick={() => { if (gifLive) stopLive(); showStatic(preview!, "Image"); }}>
+                <Button variant="primary" disabled={!frames[0]} onClick={() => { if (gifLive) stopLive(); showStatic(frames[0], "Image"); }}>
                   Show on matrix
                 </Button>
                 <Button
                   icon={<PenLine size={16} />}
-                  disabled={!preview}
-                  onClick={() => { ed().setCurrentFrame(preview!); flash("Sent to the editor (current frame)"); }}
+                  disabled={!frames[0]}
+                  onClick={() => { ed().setCurrentFrame(frames[0]); flash("Sent to the editor (current frame)"); }}
                 >
                   Edit in Draw
                 </Button>
                 <Button
                   variant="ghost"
                   icon={<Plus size={16} />}
-                  disabled={!preview}
-                  onClick={() => { ed().appendFrames([preview!]); flash("Added as a new animation frame"); }}
+                  disabled={!frames[0]}
+                  onClick={() => { ed().appendFrames([frames[0]]); flash("Added as a new animation frame"); }}
                 >
                   Add as animation frame
                 </Button>

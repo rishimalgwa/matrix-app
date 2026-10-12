@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { NO_ADJUST, type Adjustments } from "@/core/color";
-import type { Resample } from "@/core/image";
+import { LED_ENHANCE, type Enhance, type Resample } from "@/core/image";
 import type { Frame } from "@/core/matrix";
 import { safeStorage } from "@/store/persist";
 import type { NowPlaying } from "./api";
@@ -18,6 +18,7 @@ export interface SpotifySettings {
   resample: Resample;
   adjust: Adjustments;
   colors: number;
+  enhance: Enhance;
   /** what to show when playback stops (only while Spotify is on air) */
   fallback: SpotifyFallback;
   pollSeconds: number;
@@ -41,9 +42,10 @@ export const useSpotify = create<SpotifyState>()(
       autoShow: true,
       showProgress: true,
       progressColor: 0x1ed760,
-      resample: "smooth",
+      resample: "sharp",
       adjust: { ...NO_ADJUST, saturation: 15 },
       colors: 0,
+      enhance: { ...LED_ENHANCE, sharpen: 25 },
       fallback: "keep",
       pollSeconds: 3,
 
@@ -58,9 +60,15 @@ export const useSpotify = create<SpotifyState>()(
     {
       name: "pm.spotify",
       storage: safeStorage,
+      version: 1,
+      // v0 defaulted to plain "smooth" averaging; move everyone to the sharper LED pipeline
+      migrate: (p, v) => {
+        const s = p as Partial<SpotifySettings>;
+        return v < 1 && s.resample === "smooth" ? { ...s, resample: "sharp" } : s;
+      },
       partialize: (s) => ({
         clientId: s.clientId, autoShow: s.autoShow, showProgress: s.showProgress, progressColor: s.progressColor,
-        resample: s.resample, adjust: s.adjust, colors: s.colors, fallback: s.fallback, pollSeconds: s.pollSeconds,
+        resample: s.resample, adjust: s.adjust, colors: s.colors, enhance: s.enhance, fallback: s.fallback, pollSeconds: s.pollSeconds,
       }),
     }
   )

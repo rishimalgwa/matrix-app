@@ -1,7 +1,7 @@
 /** Animated GIF decode (gifuct-js) and encode (gifenc). */
 import { decompressFrames, parseGIF } from "gifuct-js";
 import { GIFEncoder, applyPalette, quantize } from "gifenc";
-import { rasterize, type RasterOptions } from "./image";
+import { sampleCells, toneCells, type Cells, type RasterOptions } from "./image";
 import { H, W, type Frame } from "./matrix";
 
 export interface DecodedGif {
@@ -56,8 +56,14 @@ export async function decodeGif(buffer: ArrayBuffer): Promise<DecodedGif> {
   return { width, height, canvases, delays };
 }
 
+/** Sampling is the slow part; tone/colour changes can reuse these cells. */
+export function sampleGif(gif: DecodedGif, opts: Parameters<typeof sampleCells>[1]): Cells[] {
+  return gif.canvases.map((c) => sampleCells(c, opts));
+}
+
+/** Levels and palette are computed over all frames together, so colours don't flicker. */
 export function gifToFrames(gif: DecodedGif, opts: RasterOptions) {
-  return gif.canvases.map((c) => rasterize(c, opts));
+  return toneCells(sampleGif(gif, opts), opts);
 }
 
 /** Encodes frames as an upscaled animated GIF. */

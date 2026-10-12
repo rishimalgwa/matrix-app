@@ -4,6 +4,7 @@ import { LiveButton } from "@/components/LiveButton";
 import { MatrixCanvas } from "@/components/MatrixCanvas";
 import { Badge, Button, ColorField, Field, Segmented, Slider, Toggle } from "@/components/ui";
 import { useAnimatedFrame } from "@/hooks/useAnimatedFrame";
+import { LED_ENHANCE, NO_ENHANCE } from "@/core/image";
 import { redirectUri } from "./auth";
 import { connectSpotify, disconnectSpotify, refreshSpotify, renderSpotifyFrame, rerenderCover } from "./service";
 import { progressNow, useSpotify, type SpotifyFallback } from "./store";
@@ -18,7 +19,7 @@ export function SpotifyPanel() {
   const insecure = !window.isSecureContext || location.hostname === "localhost";
 
   // re-render cover when image settings change
-  useEffect(() => { void rerenderCover(); }, [s.resample, s.adjust, s.colors]);
+  useEffect(() => { void rerenderCover(); }, [s.resample, s.adjust, s.colors, s.enhance]);
 
   if (!s.connected) {
     return (
@@ -93,11 +94,19 @@ export function SpotifyPanel() {
         <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
           <div>
             <span className="label mb-1.5 block">Downsampling</span>
-            <Segmented value={s.resample} onChange={(resample) => s.set({ resample })} options={[{ value: "smooth", label: "Smooth" }, { value: "nearest", label: "Nearest" }]} />
+            <Segmented value={s.resample} onChange={(resample) => s.set({ resample })} options={[{ value: "sharp", label: "Sharp" }, { value: "smooth", label: "Smooth" }, { value: "nearest", label: "Nearest" }]} />
           </div>
           <div>
             <span className="label mb-1.5 block">Colors</span>
             <Segmented value={s.colors} onChange={(colors) => s.set({ colors })} options={[0, 32, 16, 8].map((v) => ({ value: v, label: v ? String(v) : "Full" }))} />
+          </div>
+          <div className="sm:col-span-2">
+            <Toggle
+              label="Enhance for LEDs"
+              hint="Auto-levels, shadow lift and sharpening so covers read clearly on the panel"
+              checked={s.enhance.autoLevels}
+              onChange={(on) => s.set({ enhance: on ? { ...LED_ENHANCE, sharpen: 25 } : NO_ENHANCE })}
+            />
           </div>
           <Slider label="Saturation" value={s.adjust.saturation} min={-100} max={100} onChange={(saturation) => s.set({ adjust: { ...s.adjust, saturation } })} />
           <Slider label="Contrast" value={s.adjust.contrast} min={-100} max={100} onChange={(contrast) => s.set({ adjust: { ...s.adjust, contrast } })} />

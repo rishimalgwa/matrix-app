@@ -17,7 +17,7 @@ let wasPlaying = false;
 async function renderCover(url: string): Promise<Frame> {
   const s = useSpotify.getState();
   const img = await loadImage(url, true); // i.scdn.co sends CORS headers
-  return rasterize(img, { crop: FULL_CROP, resample: s.resample, adjust: s.adjust, colors: s.colors, background: 0 });
+  return rasterize(img, { crop: FULL_CROP, resample: s.resample, adjust: s.adjust, colors: s.colors, background: 0, enhance: s.enhance });
 }
 
 /** Re-render the current cover after settings change. */
