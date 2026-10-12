@@ -75,6 +75,40 @@ You can choose what happens when playback stops: keep the cover, show the clock,
 
 > Spotify apps in "development mode" only work for users you add under the app's *User Management*. Add your own account.
 
+## Claude Code on the matrix
+
+A pixel Clawd shows what Claude Code is doing:
+
+| Claude Code | Panel |
+| --- | --- |
+| Prompt sent / between tools | thinking spark |
+| Edit, Write | code being typed |
+| Bash | terminal |
+| Read / Grep, Glob | reading / magnifying glass |
+| WebFetch, WebSearch | spinning globe |
+| Subagents | marching mini Clawds |
+| Permission prompt, question | amber "!" with a pulsing border |
+| Turn finished | green check and confetti |
+| API error / rate limit | red X / countdown until the limit resets |
+| Compacting | walls squeezing |
+| Idle → asleep | blinking cursor → z's, then the panel is handed back |
+
+Two gauges appear only when a limit gets close:
+- right edge: context window, from 60%
+- left edge: 5-hour usage limit, from 70%
+
+They turn amber, then red, and blink near 100%.
+
+```bash
+npm run claude:install       # adds hooks + status line to ~/.claude/settings.json (backed up first)
+npm run claude:uninstall     # removes them again
+npm run claude               # run the service in the foreground to watch its log (optional)
+```
+
+The service (`claude/daemon.ts`) starts by itself with each Claude Code session.
+It snapshots whatever the panel was showing (effect, preset or pixel art) and restores it when Claude goes quiet.
+Settings such as the WLED host, fps, sleep and release timing live in `claude/config.json` or can be passed as `--flags`.
+
 ## Architecture
 
 ```
@@ -89,6 +123,7 @@ src/
   features/      one folder per tab
   components/    MatrixCanvas, UI primitives
 server/          Vite plugin: /api/discover (mDNS + subnet scan)
+claude/          Claude Code → matrix service, hooks installer, status line
 bridge/          Node websocket → UDP bridge
 dev/             mock WLED device
 ```

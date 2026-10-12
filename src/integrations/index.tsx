@@ -1,4 +1,6 @@
 import { registerSource } from "@/engine/sources";
+import { Asterisk } from "lucide-react";
+import { ClaudePanel } from "./claude/ClaudePanel";
 import { SpotifyPanel } from "./spotify/SpotifyPanel";
 import { spotifySource, startSpotify } from "./spotify/service";
 import { useSpotify } from "./spotify/store";
@@ -14,6 +16,13 @@ function SpotifyIcon() {
 
 /** All integrations. Add new ones here. */
 export const INTEGRATIONS: Integration[] = [
+  {
+    id: "claude-code",
+    name: "Claude Code",
+    description: "Clawd shows what Claude is doing — thinking, editing, running commands, needing you, done — plus context and usage-limit warnings.",
+    icon: <Asterisk size={22} className="text-[#d97757]" strokeWidth={3} />,
+    Panel: ClaudePanel,
+  },
   {
     id: "spotify",
     name: "Spotify",

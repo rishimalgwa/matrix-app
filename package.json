@@ -9,7 +9,10 @@
     "preview": "vite preview",
     "typecheck": "tsc -b && tsc -p tsconfig.node.json",
     "bridge": "node bridge/udp-bridge.mjs",
-    "mock": "node dev/mock-wled.mjs"
+    "mock": "node dev/mock-wled.mjs",
+    "claude": "tsx claude/daemon.ts",
+    "claude:install": "node claude/install.mjs",
+    "claude:uninstall": "node claude/install.mjs --uninstall"
   },
   "dependencies": {
     "gifenc": "^1.0.3",
@@ -28,6 +31,7 @@
     "@vitejs/plugin-react": "^6.1.2",
     "bonjour-service": "^1.4.4",
     "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^8.3.4"
   }
